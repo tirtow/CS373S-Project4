@@ -1,7 +1,6 @@
 package toschema;
 
 import MDELite.Marquee1In_1Out;
-import Parsing.TBPrims.SaveToken.Option;
 import PrologDB.DB;
 import PrologDB.OOSchema;
 import PrologDB.SubTableSchema;
@@ -32,10 +31,11 @@ public class ToOOSchema {
         for (Tuple b : vbox.tuples()) {
             TableSchema schema = new TableSchema(b.get("name"));
             if (b.getBool("abst")) {
+                // Class is abstract
                 schema.makeAbstract();
             }
             
-            // Add fields as columns for each table
+            // Add fields as columns for each table ignoring empty fields
             String[] fields = b.get("fields").split("%");
             for (String f : fields) {
                 f = f.trim();
@@ -59,13 +59,14 @@ public class ToOOSchema {
             
             // Add subtable hierarchies
             SubTableSchema sub = new SubTableSchema(schema);
-            int count = ToOOSchema.addSubTables(schema, sub, "cid1", b.get("id"));
-            count += ToOOSchema.addSubTables(schema, sub, "cid2", b.get("id"));
+            int count = ToOOSchema.addSubTables(sub, "cid1", b.get("id"));
+            count += ToOOSchema.addSubTables(sub, "cid2", b.get("id"));
+            
+            // Only add subtable schema if actually added subtables
             if (count > 0) {
                 dbs.addSubTableSchema(sub);
             }
         }
-        
         
         // Step 4: Finally, add identifiers to all root (non-sub) tables and print
         dbs.addIdentifiersToAllNonSubtables();
@@ -88,46 +89,83 @@ public class ToOOSchema {
         String arrowColumn = "arrow1";
         Predicate<Tuple> filterPred = t->t.get("vAssociation.cid2").equals(id);
         if (joinColumn.equals("cid2")) {
+            // Joining on "cid2", flip the columns and filter being used.
             roleColumn = "role2";
             arrowColumn = "arrow2";
             filterPred = t->t.get("vAssociation.cid1").equals(id);
         }
         
-        String[] columns = {"cid1", "role1", "arrow1", "cid2", "role2", "arrow2"};
-        Table reducedVassoc = vassoc.project(columns);
-        columns = new String[]{"id", "name"};
-        Table reduceVbox = vbox.project(columns);
-        Table join = reducedVassoc.join(joinColumn, reduceVbox, "id");
+        // Join using joinColumn from vAssociation and "id" from vBox
+        Table join = vassoc.join(joinColumn, vbox, "id");
+        
+        // Filter to only rows that match the given id
         join = join.filter(filterPred);
 
+        // Add associations for each tuple
         for (Tuple t : join.tuples()) {
-            if (t.get("vAssociation." + arrowColumn).equals("DIAMOND")) {              
+            if (t.get("vAssociation." + arrowColumn).equals("DIAMOND")) {   
+                // Arrow is an open diamond so association is optional
                 ToOOSchema.addAssociationColumn(schema, t, roleColumn,
                         "option ");
             } else if (t.get("vAssociation." + arrowColumn).equals(
                     "BLACK_DIAMOND")) {
+                // Arrow is a closed diamond so association is not optional
                 ToOOSchema.addAssociationColumn(schema, t, roleColumn, "");
             }
         }
     }
-    
-    private static int addSubTables(TableSchema schema, SubTableSchema sub,
-            String joinColumn, String id) {
+     
+    /**
+     * Adds a column to the schema
+     * @param schema        the schema to add to
+     * @param t             the tuple with the column to add
+     * @param roleColumn    the column with the role to use as the name
+     * @param flags         extra text to add in the column name
+     */
+    private static void addAssociationColumn(TableSchema schema, Tuple t,
+            String roleColumn, String flags) {
+        String fieldType = t.get("vBox.name");
+        
+        // Default the field name to the fieldType unless it is given in
+        // roleColumn
+        String fieldName = fieldType;
+        if (!t.get("vAssociation." + roleColumn).equals("")) {
+            fieldName = t.get("vAssociation." + roleColumn);
+        }
+
+        // Can have multiple columns to add separated by ",". Add them all
+        for (String name : fieldName.split(",")) {
+            schema.addColumn(name + ":" + flags + fieldType);
+        }
+    }
+        
+    /**
+     * Adds the subtables for the given subtable schema.
+     * @param sub           the subtable schema to add to
+     * @param joinColumn    the column to join on. Either "cid1" or "cid2"
+     * @param id            the id of the table to filter to
+     * @return the number of subtables added
+     */
+    private static int addSubTables(SubTableSchema sub, String joinColumn,
+            String id) {
         int count = 0;
+        
+        // If joining on "cid1" then use "arrow2" and "cid2" columns
         String arrowColumn = "arrow2";
         Predicate<Tuple> filterPred = t->t.get("vAssociation.cid2").equals(id);
         if (joinColumn.equals("cid2")) {
+            // Joining on "cid2", use "arrow1" and "cid1" columns
             arrowColumn = "arrow1";
             filterPred = t->t.get("vAssociation.cid1").equals(id);
         }
         
-        String[] columns = {"cid1", "role1", "arrow1", "cid2", "role2", "arrow2"};
-        Table reducedVassoc = vassoc.project(columns);
-        columns = new String[]{"id", "name"};
-        Table reduceVbox = vbox.project(columns);
-        Table join = reducedVassoc.join(joinColumn, reduceVbox, "id");
+        // Join using joinColumn from vAssociation and "id" from vBox
+        Table join = vassoc.join(joinColumn, vbox, "id");
+        
+        // Filter to the given id
         join = join.filter(filterPred);
         
+        // Add subtables for each tuple
         for (Tuple t : join.tuples()) {
             if (t.get("vAssociation." + arrowColumn).equals("TRIANGLE")) {
                 sub.addSubTableSchema(dbs.getTableSchema(t.get("vBox.name")));
@@ -136,20 +174,5 @@ public class ToOOSchema {
         }
         
         return count;
-        
     }
-     
-    private static void addAssociationColumn(TableSchema schema, Tuple t,
-            String roleColumn, String flags) {
-        String fieldType = t.get("vBox.name");
-        String fieldName = fieldType;
-        if (!t.get("vAssociation." + roleColumn).equals("")) {
-            fieldName = t.get("vAssociation." + roleColumn);
-        }
-
-        for (String name : fieldName.split(",")) {
-            schema.addColumn(name + ":" + flags + fieldType);
-        }
-    }
-
 }
