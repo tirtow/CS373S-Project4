@@ -1,0 +1,4 @@
+bash convert.sh h1
+bash convert.sh Logic
+bash convert.sh contract
+bash convert.sh schools
