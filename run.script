@@ -1,3 +1,4 @@
+#!/bin/bash
 bash convert.sh h1
 bash convert.sh Logic
 bash convert.sh contract
